@@ -1,0 +1,25 @@
+{
+  "P1001": {
+    "profile": {
+      "name": "Jane Doe",
+      "age": 73,
+      "gender": "F",
+      "pmhx": ["Type 2 DM", "HTN", "Hyperlipidemia"],
+      "allergies": ["Penicillin (Rash)"],
+      "medications": ["Metformin", "Lisinopril", "Aspirin 81mg"]
+    },
+    "historical_labs": {
+      "Troponin-I": [
+        {"date": "10/10/2025", "value": "0.01", "unit": "ng/mL"},
+        {"date": "1/4/2026", "value": "0.01", "unit": "ng/mL"}
+      ]
+    },
+    "current_vitals": {
+      "bp": "140/90",
+      "hr": "90",
+      "rr": "18",
+      "spo2": "97%",
+      "temp": "98.4F"
+    }
+  }
+}
