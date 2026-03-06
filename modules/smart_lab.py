@@ -11,7 +11,10 @@ from __future__ import annotations
 import time
 from typing import Optional
 
-import plotly.graph_objects as go
+try:
+    import plotly.graph_objects as go
+except Exception:
+    go = None  # plotly 미설치 시 그래프 기능 비활성
 
 from .central_hub import ensure_schema
 
@@ -82,7 +85,9 @@ class SmartLab:
         self.hub.data = ctx
         return True
 
-    def get_trend_graph(self, lab_name: str) -> Optional[go.Figure]:
+    def get_trend_graph(self, lab_name: str):
+        if go is None:
+            return None
         ctx = ensure_schema(self.hub.data)
         hist = (ctx["patient"].get("historical_labs") or {}).get(lab_name) or []
         if not hist:

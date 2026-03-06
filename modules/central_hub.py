@@ -287,7 +287,7 @@ class CentralHub:
         ctx["patient"] = p
         self.data = ensure_schema(ctx)
 
-        def apply_analysis_result(self, result: Dict[str, Any]) -> None:
+    def apply_analysis_result(self, result: Dict[str, Any]) -> None:
         """
         IntelligenceEngine/Worker가 만든 결과(analysis result)를 hub.data에 안전하게 반영합니다.
 
@@ -319,9 +319,6 @@ class CentralHub:
                 tctx["status"] = triage.get("status")
             if isinstance(triage.get("meta"), dict):
                 tctx["meta"] = triage["meta"]
-
-            # (옵션) triage가 orders를 내는 구조면 doctor.suggested_orders에 합칠 수도 있음
-            # 하지만 지금은 데모 안정성을 위해 자동 merge는 하지 않습니다.
 
             ctx["intelligence"]["triage"] = tctx
 

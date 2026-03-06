@@ -59,10 +59,17 @@ class AIDoctor:
         patient_text = self._collect_patient_utterances(transcript)
         cc_summary = self._summarize_cc(patient_text)
 
-        # 간단 risk context
-        age = profile.get("age")
-        has_dm = any("dm" in (p.lower()) or "diabetes" in (p.lower()) for p in problems)
-        high_risk_context = bool((age and int(age) >= 60) or has_dm)
+        # 간단 risk context (ValueError 방지)
+        age_raw = profile.get("age")
+        age_val = None
+        try:
+            if age_raw is not None and str(age_raw).strip() != "":
+                age_val = int(float(str(age_raw).strip()))
+        except Exception:
+            age_val = None
+
+        has_dm = any(("dm" in str(p).lower()) or ("diabetes" in str(p).lower()) for p in problems)
+        high_risk_context = bool((age_val is not None and age_val >= 60) or has_dm)
 
         # 핵심: 딱 1개 alert
         alerts = []

@@ -21,7 +21,11 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except Exception:  # python-dotenv 미설치 환경 방어
+    def load_dotenv(*args, **kwargs):
+        return False
 
 try:
     from openai import OpenAI

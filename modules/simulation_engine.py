@@ -96,7 +96,11 @@ class SimulationEngine:
 
         if etype == "start":
             vitals = data.get("vitals") or {}
-            ctx["visit"]["vitals"]["latest"] = vitals
+
+            # ✅ Sync 전에는 vitals를 visit.vitals.latest에 넣지 않는다
+            # 대신 meta.hidden_start_vitals에 숨겨둔다
+            ctx.setdefault("meta", {})
+            ctx["meta"]["hidden_start_vitals"] = vitals
 
         elif etype == "transcript":
             msg = {"role": data.get("role"), "text": data.get("text"), "ts": time.time()}
