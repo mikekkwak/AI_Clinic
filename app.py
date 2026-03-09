@@ -14,6 +14,7 @@ from modules.intelligence_engine import IntelligenceEngine
 from modules.patient_manager import PatientManager
 from modules.simulation_engine import SimulationEngine
 from modules.smart_lab import SmartLab
+from modules.note_engine import NoteEngine
 
 
 def _parse_dt_any(s: Any) -> Optional[datetime]:
@@ -205,7 +206,7 @@ def render_trend_plot(
         xaxis_title="Date (MM/DD/YYYY)",
         yaxis_title="Value",
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 
 def normalize_labs_from_snapshot(patient_data: dict):
@@ -387,6 +388,9 @@ if "smart_lab" not in st.session_state:
 if "expanded_labs" not in st.session_state:
     st.session_state.expanded_labs = set()
 
+if "note_engine" not in st.session_state:
+    st.session_state.note_engine = NoteEngine()
+
 
 hub: CentralHub = st.session_state["hub_obj"]
 brain: IntelligenceEngine = st.session_state.brain
@@ -438,7 +442,7 @@ def show_all_labs_dialog(h_labs: Dict[str, List[Dict[str, Any]]]):
                 row[rec["dt"]] = rec.get("value", "-")
         table_rows.append(row)
 
-    st.dataframe(pd.DataFrame(table_rows), hide_index=True, use_container_width=True)
+    st.dataframe(pd.DataFrame(table_rows), hide_index=True, width="stretch")
 
 
 # -----------------------------
@@ -673,20 +677,59 @@ bot_L, bot_R = st.columns([1.25, 1], gap="large")
 
 # -------- Top Left: Note --------
 with top_L:
-    head_l, head_r = st.columns([4, 1])
+    head_l, head_r = st.columns([3, 1])
     with head_l:
         st.markdown('<div class="section-header">Clinical Note</div>', unsafe_allow_html=True)
     with head_r:
         if st.button("Copy Note"):
             st.toast("(Demo) Copy action triggered.")
 
+    # 1) Provider note template 선택
+    note_template_label = st.selectbox(
+        "Preferred Note Template",
+        options=["Dr. Kim UC Style", "Standard ED Style"],
+        index=0,
+        key="preferred_note_template",
+    )
+
+    template_map = {
+        "Dr. Kim UC Style": "uc_dr_kim",
+        "Standard ED Style": "ed_standard",
+    }
+    template_key = template_map[note_template_label]
+
     note_key = "clinical_note_text"
+    note_template_key = "clinical_note_template_key"
+
+    # 2) 현재 템플릿으로 note 생성
+    generated_note = st.session_state.note_engine.compose_note(
+        ctx,
+        template=template_key,
+    )
+
+    # 3) 최초 실행 시 초기화
     if note_key not in st.session_state:
-        st.session_state[note_key] = ctx["intelligence"]["doctor"].get("note", {}).get("text", "")
+        st.session_state[note_key] = generated_note
 
+    if note_template_key not in st.session_state:
+        st.session_state[note_template_key] = template_key
+
+    # 4) 템플릿이 바뀌면 note를 새로 생성해서 반영
+    if st.session_state[note_template_key] != template_key:
+        st.session_state[note_template_key] = template_key
+        st.session_state[note_key] = generated_note
+        ctx2 = ensure_schema(hub.data)
+        ctx2["intelligence"]["doctor"]["note"]["text"] = generated_note
+        hub.data = ctx2
+
+    # 5) AI 결과가 새로 들어오면 현재 템플릿으로 다시 생성
     if results:
-        st.session_state[note_key] = ctx["intelligence"]["doctor"].get("note", {}).get("text", "")
+        st.session_state[note_key] = generated_note
+        ctx2 = ensure_schema(hub.data)
+        ctx2["intelligence"]["doctor"]["note"]["text"] = generated_note
+        hub.data = ctx2
 
+    # 6) Note 표시/편집
     note_val = st.text_area(
         "note",
         value=st.session_state[note_key],
@@ -694,11 +737,12 @@ with top_L:
         label_visibility="collapsed",
     )
 
-    if note_val != ctx["intelligence"]["doctor"].get("note", {}).get("text", ""):
+    # 7) 사용자가 직접 수정한 경우 hub와 session_state에 저장
+    if note_val != st.session_state[note_key]:
+        st.session_state[note_key] = note_val
         ctx2 = ensure_schema(hub.data)
         ctx2["intelligence"]["doctor"]["note"]["text"] = note_val
         hub.data = ctx2
-
 
 # -------- Top Right: Alerts / Recommendations / Orders --------
 with top_R:
@@ -786,7 +830,7 @@ with bot_L:
         sel = st.dataframe(
             df,
             hide_index=True,
-            use_container_width=True,
+            width="stretch",
             on_select="rerun",
             selection_mode="single-row",
         )
