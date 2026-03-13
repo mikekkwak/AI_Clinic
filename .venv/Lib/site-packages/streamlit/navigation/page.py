@@ -16,9 +16,9 @@ from __future__ import annotations
 
 import types
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
-from streamlit.errors import StreamlitAPIException
+from streamlit.errors import StreamlitAPIException, StreamlitValueError
 from streamlit.runtime.metrics_util import gather_metrics
 from streamlit.runtime.scriptrunner_utils.script_run_context import get_script_run_ctx
 from streamlit.source_util import page_icon_and_name
@@ -37,6 +37,7 @@ def Page(  # noqa: N802
     icon: str | None = None,
     url_path: str | None = None,
     default: bool = False,
+    visibility: Literal["visible", "hidden"] = "visible",
 ) -> StreamlitPage:
     """Configure a page for ``st.navigation`` in a multipage app.
 
@@ -65,6 +66,21 @@ def Page(  # noqa: N802
         inferred from the filename or callable name in ``page``. For more
         information, see `Overview of multipage apps
         <https://docs.streamlit.io/st.page.automatic-page-labels>`_.
+
+        The title supports GitHub-flavored Markdown of the following types:
+        Bold, Italics, Strikethrough, Inline Code, and Images. Images display
+        like icons, with a max height equal to the font height.
+
+        Unsupported Markdown elements are unwrapped so only their children
+        (text contents) render. Common block-level Markdown (headings,
+        lists, blockquotes) is automatically escaped and displays as
+        literal text in labels.
+
+        See the ``body`` parameter of |st.markdown|_ for additional, supported
+        Markdown directives.
+
+        .. |st.markdown| replace:: ``st.markdown``
+        .. _st.markdown: https://docs.streamlit.io/develop/api-reference/text/st.markdown
 
     icon : str or None
         An optional emoji or icon to display next to the page title and label.
@@ -112,6 +128,20 @@ def Page(  # noqa: N802
         default page. If ``default`` is ``True``, then the page will have
         an empty pathname and ``url_path`` will be ignored.
 
+    visibility : "visible" or "hidden"
+        Whether the page is shown in the navigation menu. If this is
+        ``"visible"`` (default), the page appears in the navigation menu. If
+        this is ``"hidden"``, the page is excluded from the navigation menu but
+        remains accessible via direct URL, ``st.page_link``, or
+        ``st.switch_page``.
+
+        .. note::
+
+           Navigating to a page by URL starts a new session. For a
+           hidden page to be accessible by URL, it must be passed to
+           ``st.navigation`` during the new session's initial script
+           run.
+
     Returns
     -------
     StreamlitPage
@@ -131,7 +161,12 @@ def Page(  # noqa: N802
     >>> pg.run()
     """
     return StreamlitPage(
-        page, title=title, icon=icon, url_path=url_path, default=default
+        page,
+        title=title,
+        icon=icon,
+        url_path=url_path,
+        default=default,
+        visibility=visibility,
     )
 
 
@@ -155,6 +190,8 @@ class StreamlitPage:
         `Overview of multipage apps
         <https://docs.streamlit.io/st.page.automatic-page-labels>`_.
 
+        The title supports GitHub-flavored Markdown as described in ``st.Page``.
+
     url_path : str
         The page's URL pathname, which is the path relative to the app's root
         URL.
@@ -167,6 +204,20 @@ class StreamlitPage:
         The default page will always have a ``url_path`` of ``""`` to indicate
         the root URL (e.g. homepage).
 
+    visibility : Literal["visible", "hidden"]
+        Whether the page is shown in the navigation menu. If this is
+        ``"visible"`` (default), the page appears in the navigation menu. If
+        this is ``"hidden"``, the page is excluded from the navigation menu but
+        remains accessible via direct URL, ``st.page_link``, or
+        ``st.switch_page``.
+
+        .. note::
+
+           Navigating to a page by URL starts a new session. For a
+           hidden page to be accessible by URL, it must be passed to
+           ``st.navigation`` during the new session's initial script
+           run.
+
     """
 
     def __init__(
@@ -177,10 +228,16 @@ class StreamlitPage:
         icon: str | None = None,
         url_path: str | None = None,
         default: bool = False,
+        visibility: Literal["visible", "hidden"] = "visible",
     ) -> None:
         # Must appear before the return so all pages, even if running in bare Python,
         # have a _default property. This way we can always tell which script needs to run.
         self._default: bool = default
+
+        # Validate and store visibility before potential early return
+        if visibility not in {"visible", "hidden"}:
+            raise StreamlitValueError("visibility", ["visible", "hidden"])
+        self._visibility: Literal["visible", "hidden"] = visibility
 
         ctx = get_script_run_ctx()
         if not ctx:
@@ -228,12 +285,14 @@ class StreamlitPage:
 
         self._url_path: str = inferred_name
         if url_path is not None:
-            if url_path.strip() == "" and not default:
+            url_path_trimmed = url_path.strip()
+            stripped_url_path = url_path_trimmed.strip("/")
+            if stripped_url_path.strip() == "" and not default:
                 raise StreamlitAPIException(
                     "The URL path cannot be an empty string unless the page is the default page."
                 )
 
-            self._url_path = url_path.strip("/")
+            self._url_path = stripped_url_path
             if "/" in self._url_path:
                 raise StreamlitAPIException(
                     "The URL path cannot contain a nested path (e.g. foo/bar)."
@@ -253,6 +312,8 @@ class StreamlitPage:
         from the filename or callable name. For more information, see
         `Overview of multipage apps
         <https://docs.streamlit.io/st.page.automatic-page-labels>`_.
+
+        The title supports GitHub-flavored Markdown as described in ``st.Page``.
         """
         return self._title
 
@@ -279,6 +340,17 @@ class StreamlitPage:
         """
         return "" if self._default else self._url_path
 
+    @property
+    def visibility(self) -> Literal["visible", "hidden"]:
+        """The visibility of the page in the navigation menu.
+
+        This property returns ``"visible"`` (default) or ``"hidden"``.
+        Hidden pages are not shown in the navigation menu but can still
+        be accessed via URL or programmatically using ``st.switch_page``
+        or ``st.page_link``.
+        """
+        return self._visibility
+
     def run(self) -> None:
         """Execute the page.
 
@@ -300,14 +372,15 @@ class StreamlitPage:
             return
 
         with ctx.run_with_active_hash(self._script_hash):
-            if callable(self._page):
-                self._page()
+            if isinstance(self._page, Path):
+                code = ctx.pages_manager.get_page_script_byte_code(str(self._page))
+                module = types.ModuleType("__main__")
+                # We want __file__ to be the string path to the script
+                module.__dict__["__file__"] = str(self._page)
+                exec(code, module.__dict__)  # noqa: S102
                 return
-            code = ctx.pages_manager.get_page_script_byte_code(str(self._page))
-            module = types.ModuleType("__main__")
-            # We want __file__ to be the string path to the script
-            module.__dict__["__file__"] = str(self._page)
-            exec(code, module.__dict__)  # noqa: S102
+
+            self._page()
 
     @property
     def _script_hash(self) -> str:

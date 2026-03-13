@@ -1,0 +1,27 @@
+{
+    "scenario_name": "Sepsis Concern from Ruptured Appendicitis",
+    "patient_id": "P1002",
+    "timeline": [
+      { "seconds": 0, "type": "start", "data": { "vitals": {"bp": "90/60", "hr": "122", "rr": "26", "spo2": "97%", "temp": "102.6F"} } },
+  
+      { "seconds": 2, "type": "transcript", "data": {"role": "doctor", "text": "Hi Mr. Carter, I’m Dr. Lee. What brings you in today?"} },
+      { "seconds": 5, "type": "transcript", "data": {"role": "patient", "text": "I’ve had stomach pain since yesterday and it keeps getting worse."} },
+  
+      { "seconds": 9, "type": "transcript", "data": {"role": "doctor", "text": "Where is the pain located now?"} },
+      { "seconds": 12, "type": "transcript", "data": {"role": "patient", "text": "Mostly in the lower right side now."} },
+  
+      { "seconds": 16, "type": "transcript", "data": {"role": "doctor", "text": "Did it start there?"} },
+      { "seconds": 19, "type": "transcript", "data": {"role": "patient", "text": "No, it started around my belly button yesterday and then moved."} },
+  
+      { "seconds": 23, "type": "transcript", "data": {"role": "doctor", "text": "Have you had fever or chills?"} },
+      { "seconds": 26, "type": "transcript", "data": {"role": "patient", "text": "Yes, I had both this morning."} },
+  
+      { "seconds": 30, "type": "transcript", "data": {"role": "doctor", "text": "Any nausea or vomiting?"} },
+      { "seconds": 33, "type": "transcript", "data": {"role": "patient", "text": "I’ve been nauseous and threw up once."} },
+  
+      { "seconds": 37, "type": "transcript", "data": {"role": "doctor", "text": "Does it hurt more when you walk or move?"} },
+      { "seconds": 40, "type": "transcript", "data": {"role": "patient", "text": "Yes, walking makes it much worse."} },
+  
+      { "seconds": 45, "type": "transcript", "data": {"role": "doctor", "text": "Your blood pressure is low and your heart rate is high. I’m concerned this may be a serious abdominal infection, possibly appendicitis with rupture. We need immediate IV fluids, antibiotics, and emergency department evaluation."} }
+    ]
+}

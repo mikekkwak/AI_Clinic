@@ -34,7 +34,6 @@ def _parse_dt_any(s: Any) -> Optional[datetime]:
         return None
 
     s = s.strip()
-    # 상대시간 텍스트는 날짜로 쓰기 어려우니 None
     lowered = s.lower()
     if "ago" in lowered or "month" in lowered or "day" in lowered or "year" in lowered:
         return None
@@ -68,6 +67,110 @@ def _safe_str(x: Any) -> str:
     return str(x)
 
 
+def _title_case_order_type(x: str) -> str:
+    s = (x or "").strip().replace("_", " ")
+    return s.title() if s else ""
+
+
+def _flatten_suggested_orders_for_ui(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    doctor output이 아래 두 구조 중 어느 것이 와도 UI에서 일관되게 보여주기 위한 정규화 함수.
+
+    Supported:
+    1) old grouped format
+       suggested_orders = [
+         {"title": "...", "priority": "high", "items": ["ECG", "Troponin"]}
+       ]
+
+    2) structured future-ready format
+       recommended_orders = [
+         {"id": "...", "label": "ECG 12-lead", "type": "procedure", "priority": "high", "reason": "..."}
+       ]
+
+    반환 형식:
+    [
+      {
+        "label": "ECG 12-lead",
+        "priority": "high",
+        "type": "procedure",
+        "reason": "Possible ACS",
+        "source_group": "Priority Orders"
+      }
+    ]
+    """
+    doctor_obj = ((ctx.get("intelligence") or {}).get("doctor") or {})
+
+    normalized: List[Dict[str, Any]] = []
+
+    # Preferred future-ready structured format
+    recommended_orders = doctor_obj.get("recommended_orders") or []
+    if isinstance(recommended_orders, list) and recommended_orders:
+        for row in recommended_orders:
+            if not isinstance(row, dict):
+                continue
+            label = str(row.get("label") or row.get("title") or row.get("id") or "").strip()
+            if not label:
+                continue
+            normalized.append(
+                {
+                    "label": label,
+                    "priority": str(row.get("priority") or "").strip().lower(),
+                    "type": str(row.get("type") or "").strip().lower(),
+                    "reason": str(row.get("reason") or "").strip(),
+                    "source_group": "",
+                    "id": str(row.get("id") or "").strip(),
+                }
+            )
+
+    # Backward compatibility with existing grouped suggested_orders
+    if not normalized:
+        suggested_orders = doctor_obj.get("suggested_orders") or []
+        if isinstance(suggested_orders, list):
+            for group in suggested_orders:
+                if not isinstance(group, dict):
+                    continue
+                group_title = str(group.get("title") or "").strip()
+                priority = str(group.get("priority") or "").strip().lower()
+                items = group.get("items") or []
+                if not isinstance(items, list):
+                    continue
+                for item in items:
+                    label = str(item).strip()
+                    if not label:
+                        continue
+                    normalized.append(
+                        {
+                            "label": label,
+                            "priority": priority,
+                            "type": "",
+                            "reason": "",
+                            "source_group": group_title,
+                            "id": "",
+                        }
+                    )
+
+    # Deduplicate while preserving order
+    deduped: List[Dict[str, Any]] = []
+    seen = set()
+    for row in normalized:
+        key = (
+            row.get("label", "").lower(),
+            row.get("priority", "").lower(),
+            row.get("type", "").lower(),
+            row.get("reason", "").lower(),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(row)
+
+    # Sort by priority then label
+    rank = {"high": 0, "medium": 1, "low": 2, "": 3}
+    deduped.sort(key=lambda x: (rank.get(str(x.get("priority") or "").lower(), 9), str(x.get("label") or "").lower()))
+
+    return deduped
+
+
 def build_labs_table_rows(
     current_items: List[Dict[str, Any]],
     labs_history: List[Dict[str, Any]],
@@ -81,7 +184,6 @@ def build_labs_table_rows(
     - Units
     - (optional) Reference Interval (지금은 빈칸)
     """
-    # history를 test name 별로 모아두기
     by_name: Dict[str, List[Dict[str, Any]]] = {}
     for h in labs_history or []:
         nm = (h.get("name") or h.get("display") or "").strip()
@@ -97,30 +199,25 @@ def build_labs_table_rows(
         unit = item.get("unit") or ""
         flag = item.get("flag") or ""
 
-        # 현재 결과 문자열 (예: "0.45  High")
         current_str = f"{_safe_str(val)}"
         if flag:
             current_str += f"   {flag}"
 
-        # 이전 결과: labs_history에서 같은 name 중 "가장 최근 이전값" 찾기
         prev_str = ""
         hist = by_name.get(name, [])
 
-        # history가 섞여 있을 수 있으니 dt/ts 파싱 가능한 것 위주로 정렬
         hist_pts: List[Tuple[Optional[datetime], Dict[str, Any]]] = []
         for h in hist:
-            dt = _parse_dt_any(h.get("dt") or h.get("ts"))
+            dt = _parse_dt_any(h.get("dt") or h.get("ts") or h.get("date"))
             hist_pts.append((dt, h))
-        hist_pts.sort(key=lambda x: (x[0] is None, x[0]))  # None은 뒤로
+        hist_pts.sort(key=lambda x: (x[0] is None, x[0]))
 
-        # item의 dt가 있다면 그 이전값을 찾고, 없으면 마지막-1을 시도
-        cur_dt = _parse_dt_any(item.get("dt") or item.get("ts"))
+        cur_dt = _parse_dt_any(item.get("dt") or item.get("ts") or item.get("date"))
 
         prev_candidate: Optional[Dict[str, Any]] = None
 
         if hist_pts:
             if cur_dt:
-                # cur_dt보다 작은 것 중 가장 큰 dt
                 best_dt = None
                 for dt, h in hist_pts:
                     if dt and dt < cur_dt:
@@ -128,13 +225,12 @@ def build_labs_table_rows(
                             best_dt = dt
                             prev_candidate = h
             else:
-                # cur_dt 없으면 마지막 값이 현재일 수 있으니 마지막-1 시도
                 if len(hist_pts) >= 2:
                     prev_candidate = hist_pts[-2][1]
 
         if prev_candidate:
             pv = prev_candidate.get("value")
-            pdt = _parse_dt_any(prev_candidate.get("dt") or prev_candidate.get("ts"))
+            pdt = _parse_dt_any(prev_candidate.get("dt") or prev_candidate.get("ts") or prev_candidate.get("date"))
             pdt_s = _fmt_us_date(pdt)
             prev_str = f"{_safe_str(pv)}"
             if pdt_s:
@@ -146,7 +242,7 @@ def build_labs_table_rows(
                 "Current Result and Flag": current_str,
                 "Previous Result and Date": prev_str,
                 "Units": unit,
-                "Reference Interval": "",  # 나중에 lab config 모듈로 확장 가능
+                "Reference Interval": "",
             }
         )
 
@@ -164,12 +260,11 @@ def render_trend_plot(
     """
     pts: List[Tuple[datetime, float]] = []
 
-    # 1) history points
     for h in labs_history or []:
         nm = (h.get("name") or h.get("display") or "").strip()
         if nm != test_name:
             continue
-        dt = _parse_dt_any(h.get("dt") or h.get("ts"))
+        dt = _parse_dt_any(h.get("dt") or h.get("ts") or h.get("date"))
         if not dt:
             continue
         val = h.get("value")
@@ -179,9 +274,8 @@ def render_trend_plot(
             continue
         pts.append((dt, fv))
 
-    # 2) current (critical/latest) point 포함  ✅ 핵심
     if current_item:
-        dtc = _parse_dt_any(current_item.get("dt") or current_item.get("ts"))
+        dtc = _parse_dt_any(current_item.get("dt") or current_item.get("ts") or current_item.get("date"))
         if dtc:
             try:
                 fvc = float(current_item.get("value"))
@@ -189,7 +283,6 @@ def render_trend_plot(
             except Exception:
                 pass
 
-    # 정렬 + 중복 제거(같은 날짜면 마지막 값 우선)
     pts.sort(key=lambda x: x[0])
     if len(pts) < 2:
         st.caption("Not enough historical points to show a trend yet.")
@@ -226,7 +319,6 @@ def normalize_labs_from_snapshot(patient_data: dict):
     hist = patient_data.get("historical_labs")
     curr = patient_data.get("current_labs")
 
-    # historical_labs -> history로 평탄화
     if isinstance(hist, list):
         for row in hist:
             if isinstance(row, dict):
@@ -240,14 +332,12 @@ def normalize_labs_from_snapshot(patient_data: dict):
                         rr.setdefault("name", test_name)
                         history.append(rr)
 
-    # current_labs -> history + latest
     if isinstance(curr, list):
         for row in curr:
             if isinstance(row, dict):
                 history.append(row)
                 latest.append(row)
 
-    # current_labs가 없으면 history에서 마지막 값들을 latest로 추정
     if not latest and history:
         seen = {}
         for r in history:
@@ -256,19 +346,17 @@ def normalize_labs_from_snapshot(patient_data: dict):
                 seen[nm.lower()] = r
         latest = list(seen.values())
 
-    # normalize row keys (name/value/unit/dt/flag)
     def norm_row(r):
         name = r.get("name") or r.get("display") or r.get("key") or "Lab"
         value = r.get("value", r.get("val"))
         unit = r.get("unit") or ""
-        dt = r.get("dt", r.get("ts")) or ""
+        dt = r.get("dt", r.get("ts") or r.get("date")) or ""
         flag = r.get("flag") or ""
         return {"name": str(name), "value": value, "unit": unit, "flag": flag, "dt": str(dt)}
 
     history_n = [norm_row(r) for r in history if isinstance(r, dict)]
     latest_n = [norm_row(r) for r in latest if isinstance(r, dict)]
 
-    # critical은 flag가 High/Critical인 것만
     for r in latest_n:
         f = str(r.get("flag", "")).lower()
         if f in ("high", "critical"):
@@ -277,9 +365,32 @@ def normalize_labs_from_snapshot(patient_data: dict):
     return history_n, latest_n, critical
 
 
+def select_key_labs_for_demo(pid: str, latest_labs: List[Dict[str, Any]]):
+    """
+    Demo용: 케이스별로 의미 있는 labs만 선택.
+    원본 labs는 유지하고, UI 표시용만 필터링한다.
+    """
+    key_map = {
+        "P1001": ["Troponin", "Creatinine"],
+        "P1002": ["WBC", "Lactate", "Creatinine"],
+        "P1003": ["Urinalysis - Nitrite", "Urinalysis - Leukocyte Esterase", "Urinalysis - WBC"],
+    }
+
+    wanted = key_map.get(pid, [])
+
+    selected = []
+    for lab in latest_labs:
+        name = lab.get("name", "")
+        for w in wanted:
+            if w.lower() in name.lower():
+                selected.append(lab)
+                break
+
+    return selected
+
+
 st.set_page_config(layout="wide", page_title="Safety OS", initial_sidebar_state="expanded")
 
-# Streamlit 버전별 호환 (query_params 미지원 대비)
 try:
     view = st.query_params.get("view", "")
 except Exception:
@@ -351,6 +462,56 @@ st.markdown(
 
   div.stButton > button { width: 100%; border-radius: 6px; font-weight: 700; font-size: 0.85rem; padding: 6px 10px; }
   .streamlit-expanderHeader { font-size: 0.95rem !important; font-weight: 600 !important; color: #111827 !important; background-color: #f8fafc; border-radius: 6px; }
+
+  .order-row {
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    background: #ffffff;
+    padding: 10px 12px;
+    margin-bottom: 8px;
+  }
+  .order-row-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .order-label {
+    font-weight: 700;
+    color: #111827;
+    font-size: 0.96rem;
+  }
+  .order-meta {
+    font-size: 0.80rem;
+    color: #475569;
+    margin-top: 4px;
+  }
+  .order-pill {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    border: 1px solid #e2e8f0;
+    background: #f8fafc;
+    color: #1f2937;
+    white-space: nowrap;
+  }
+  .order-priority-high {
+    background: #fef2f2;
+    border-color: #fecaca;
+    color: #b91c1c;
+  }
+  .order-priority-medium {
+    background: #fffbeb;
+    border-color: #fde68a;
+    color: #b45309;
+  }
+  .order-priority-low {
+    background: #ecfdf5;
+    border-color: #a7f3d0;
+    color: #047857;
+  }
 </style>
 """,
     unsafe_allow_html=True,
@@ -452,14 +613,12 @@ def show_all_labs_dialog(h_labs: Dict[str, List[Dict[str, Any]]]):
 with st.sidebar:
     st.header("System Controls")
 
-    # (1) patient selection
     st.markdown("**1) Patient**")
 
     patient_ids = p_store.list_patient_ids()
     if not patient_ids:
         patient_ids = ["P1001"]
 
-    # 처음 실행 시 기본 pid 설정
     if "selected_pid" not in st.session_state:
         current_pid = (ctx.get("patient") or {}).get("patient_id")
         st.session_state.selected_pid = current_pid if current_pid in patient_ids else patient_ids[0]
@@ -479,71 +638,74 @@ with st.sidebar:
             st.warning(f"No patient data found for pid={pid} in patients_db.json")
             st.rerun()
 
-        # 1) patient snapshot merge (profile/pmhx/allergy/meds/historical_labs 등)
-        hub.apply_patient_snapshot(patient_data)
+        ctx = ensure_schema(hub.data)
 
-        # 2) schema-safe visit fields
-        ctx = hub.data
-        if not isinstance(ctx, dict):
-            ctx = {}
+        ctx.setdefault("patient", {})
+        ctx["patient"]["patient_id"] = pid
+
+        profile = patient_data.get("profile") or {}
+        gender_val = profile.get("gender") or profile.get("sex") or ""
+
+        ctx["patient"]["profile"] = {
+            "name": profile.get("name", "Unknown Patient"),
+            "age": profile.get("age"),
+            "gender": gender_val,
+            "sex": gender_val,
+        }
+
+        ctx["patient"]["problems"] = patient_data.get("pmhx") or patient_data.get("problems") or []
+        ctx["patient"]["allergies"] = patient_data.get("allergies") or []
+        ctx["patient"]["medications"] = patient_data.get("medications") or []
+        ctx["patient"]["historical_labs"] = patient_data.get("historical_labs") or {}
+        ctx["patient"]["current_labs"] = patient_data.get("current_labs") or []
 
         ctx.setdefault("visit", {})
-        ctx["visit"].setdefault("vitals", {})
-        if isinstance(ctx["visit"]["vitals"], dict):
-            ctx["visit"]["vitals"].setdefault("latest", {})
         ctx["visit"].setdefault("transcript", [])
-        ctx["visit"].setdefault("labs", {})
-        ctx["visit"]["labs"].setdefault("history", [])
-        ctx["visit"]["labs"].setdefault("latest", [])
-        ctx["visit"]["labs"].setdefault("critical", [])
 
-        # 3) vitals: EMR snapshot 기본 -> hidden start vitals 있으면 sync 시점에만 override
+        ctx["visit"]["vitals"] = {"latest": {}}
+        ctx["visit"]["labs"] = {
+            "history": [],
+            "latest": [],
+            "critical": [],
+        }
+
         emr_vitals = patient_data.get("current_vitals") or {}
-        if emr_vitals:
-            ctx["visit"]["vitals"]["latest"] = emr_vitals
+        norm_vitals = {
+            "bp": emr_vitals.get("bp", ""),
+            "hr": emr_vitals.get("hr", ""),
+            "rr": emr_vitals.get("rr", ""),
+            "spo2": emr_vitals.get("spo2") or emr_vitals.get("spo2(%)") or "",
+            "temp": emr_vitals.get("temp") or emr_vitals.get("temp(F)") or "",
+        }
+        ctx["visit"]["vitals"]["latest"] = {k: v for k, v in norm_vitals.items() if v not in (None, "")}
 
         hidden = (ctx.get("meta") or {}).get("hidden_start_vitals") or {}
         if hidden:
             ctx["visit"]["vitals"]["latest"] = hidden
 
-        # 4) labs: normalize from patient snapshot, store into visit.labs
         history_n, latest_n, critical_n = normalize_labs_from_snapshot(patient_data)
+
         ctx["visit"]["labs"]["history"] = history_n
         ctx["visit"]["labs"]["latest"] = latest_n
         ctx["visit"]["labs"]["critical"] = critical_n
 
-        # 4-B) ✅ demo: "Import Labs" 효과를 Sync 안으로 흡수
-        try:
-            smart_lab.simulate_external_import()
+        display_labs = select_key_labs_for_demo(pid, latest_n)
+        if display_labs:
+            ctx["visit"]["labs"]["critical"] = display_labs
 
-            ctx_after = hub.data
-            if not isinstance(ctx_after, dict):
-                ctx_after = {}
-
-            labs_after = ((ctx_after.get("visit") or {}).get("labs") or {})
-            if isinstance(labs_after, dict):
-                h2 = labs_after.get("history")
-                l2 = labs_after.get("latest")
-                c2 = labs_after.get("critical")
-
-                if isinstance(h2, list) and h2:
-                    ctx["visit"]["labs"]["history"] = h2
-                if isinstance(l2, list) and l2:
-                    ctx["visit"]["labs"]["latest"] = l2
-                if isinstance(c2, list) and c2:
-                    ctx["visit"]["labs"]["critical"] = c2
-
-            hub.append_event({"type": "labs.import", "ts": time.time(), "source": "ui"})
-
-        except Exception as e:
-            hub.log(f"Demo lab import skipped: {e}")
-
-        # 5) flags
         hub.data = ctx
         hub.set_patient_synced(True)
         st.session_state.emr_synced = True
+        st.session_state.expanded_labs = set()
 
-        # Sync 직후 환자정보 반영해서 triage 재평가
+        try:
+            st.query_params.pop("trend", None)
+        except Exception:
+            try:
+                st.experimental_set_query_params()
+            except Exception:
+                pass
+
         hub.set_ai_status("thinking")
         brain.enqueue_from_hub(hub, reason="sync")
 
@@ -551,7 +713,6 @@ with st.sidebar:
 
     st.markdown("---")
 
-    # (2) encounter demo
     st.markdown("**2) Encounter / Demo**")
     col_a, col_b = st.columns(2)
     with col_a:
@@ -559,15 +720,33 @@ with st.sidebar:
             st.session_state.emr_synced = False
             hub.set_patient_synced(False)
 
-            ok, msg = engine.load_scenario("acs_autopilot.json")
+            scenario_map = {
+                "P1001": "acs_autopilot.json",
+                "P1002": "sepsis_appendicitis_demo.json",
+                "P1003": "uti_demo.json",
+            }
+
+            selected_pid = st.session_state.selected_pid
+            scenario_file = scenario_map.get(selected_pid, "acs_autopilot.json")
+
+            ok, msg = engine.load_scenario(scenario_file)
             if not ok:
                 st.error(msg)
             else:
                 engine.start()
-                hub.append_event({"type": "simulation.start", "ts": time.time(), "source": "ui", "payload": {"scenario": msg}})
+                hub.append_event(
+                    {
+                        "type": "simulation.start",
+                        "ts": time.time(),
+                        "source": "ui",
+                        "payload": {
+                            "scenario": scenario_file,
+                            "patient_id": selected_pid
+                        }
+                    }
+                )
                 st.session_state.expanded_labs = set()
 
-                # ✅ trend param 초기화 (이전 환자의 trend가 남는 것 방지)
                 try:
                     st.query_params.pop("trend", None)
                 except Exception:
@@ -585,11 +764,9 @@ with st.sidebar:
             hub.set_patient_synced(False)
             st.session_state.expanded_labs = set()
 
-            # ✅ Reset 시 노트도 같이 초기화 (노트가 남는 문제 해결)
             if "clinical_note_text" in st.session_state:
                 del st.session_state["clinical_note_text"]
 
-            # ✅ trend param도 초기화
             try:
                 st.query_params.pop("trend", None)
             except Exception:
@@ -619,64 +796,86 @@ with st.sidebar:
 
     st.caption("LLM calls run only if OPENAI_API_KEY is set in environment.")
 
-
 # -----------------------------
-# Patient banner + vitals strip
+# Patient banner + main layout
 # -----------------------------
-
 ctx = ensure_schema(hub.data)
 
-demo = ctx.get("patient", {}).get("profile", {})
-pmhx_str = ", ".join(ctx.get("patient", {}).get("problems", []) or [])
+patient_obj = ctx.get("patient") or {}
+demo = patient_obj.get("profile") or {}
+
+pmhx_list = patient_obj.get("problems") or patient_obj.get("pmhx") or []
+pmhx_str = ", ".join(pmhx_list) if pmhx_list else ""
 
 p_name = demo.get("name", "Unknown Patient")
 p_age = demo.get("age", "-")
-p_sex = demo.get("sex", demo.get("gender", "-"))
+p_sex = demo.get("sex") or demo.get("gender") or "-"
 p_pmhx = pmhx_str if pmhx_str else "Not available"
-p_alg = ", ".join(ctx.get("patient", {}).get("allergies", []) or []) or "Not available"
+p_alg = ", ".join(patient_obj.get("allergies", []) or []) or "Not available"
+
+v = ((ctx.get("visit") or {}).get("vitals") or {}).get("latest") or {}
+
+if "spo2" not in v and "spo2(%)" in v:
+    v["spo2"] = v.get("spo2(%)")
+
+if "temp" not in v and "temp(F)" in v:
+    v["temp"] = v.get("temp(F)")
 
 if not st.session_state.emr_synced:
     st.info("No patient loaded. Click **Sync EMR Data** to load patient info, vitals, and labs.")
 else:
-    st.markdown(
-        f"""
-    <div class="patient-banner">
-    <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:16px;">
-        <div>
-        <span style="font-size: 1.35rem; font-weight: 800;">{p_name}</span>
-        <span style="font-size: 1.0rem; font-weight: 700; color:#334155;">({p_age}/{p_sex})</span><br>
-        <span style="font-size: 0.85rem; color: #475569;"><b>PMHx:</b> {p_pmhx} &nbsp;|&nbsp; <b>Allergies:</b> {p_alg}</span>
-        </div>
-        <div>
-        <span class="pill">Safety OS</span>
-        </div>
-    </div>
-    </div>
-    """,
-        unsafe_allow_html=True,
-    )
+    banner_left, banner_right = st.columns([3.2, 2.0], gap="medium")
 
-# vitals strip (compact)
-v = ((ctx.get("visit") or {}).get("vitals") or {}).get("latest") or {}
-if v:
-    vitals_html = ""
-    for label, key in [("BP", "bp"), ("HR", "hr"), ("RR", "rr"), ("SpO2", "spo2"), ("Temp", "temp")]:
-        val = v.get(key, "-")
-        vitals_html += f"<div class='vital-card'><div class='vital-label'>{label}</div><div class='vital-value'>{val}</div></div>"
-    st.markdown(f"<div class='vital-row'>{vitals_html}</div>", unsafe_allow_html=True)
+    with banner_left:
+        st.markdown(
+            f"""
+            <div class="patient-banner" style="margin-bottom:0;">
+              <div>
+                <span style="font-size: 1.35rem; font-weight: 800;">{p_name}</span>
+                <span style="font-size: 1.0rem; font-weight: 700; color:#334155;">({p_age}/{p_sex})</span>
+              </div>
+              <div style="font-size: 0.85rem; color: #475569; margin-top:4px;">
+                <b>PMHx:</b> {p_pmhx} &nbsp;|&nbsp; <b>Allergies:</b> {p_alg}
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
+    with banner_right:
+        if v:
+            vc1, vc2, vc3, vc4, vc5 = st.columns(5, gap="small")
+            vital_cols = [vc1, vc2, vc3, vc4, vc5]
+
+            for col, (label, key) in zip(
+                vital_cols,
+                [("BP", "bp"), ("HR", "hr"), ("RR", "rr"), ("SpO2", "spo2"), ("Temp", "temp")]
+            ):
+                val = v.get(key, "-")
+                col.markdown(
+                    f"""
+                    <div class="vital-card">
+                    <div class="vital-label">{label}</div>
+                    <div class="vital-value">{val}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
 
 # -----------------------------
-# Main layout (2 rows)
-#   Top:  Note | Alerts
-#   Bottom: Labs | Script/Log
+# Main layout
 # -----------------------------
+st.write("")
+st.write("")
+st.write("")
+st.write("")
+st.write("")
 
-top_L, top_R = st.columns([1.25, 1], gap="large")
-bot_L, bot_R = st.columns([1.25, 1], gap="large")
+col_L, col_R = st.columns([1.25, 1], gap="large")
 
-# -------- Top Left: Note --------
-with top_L:
+
+# -------- Left: Note + Critical Labs --------
+with col_L:
     head_l, head_r = st.columns([3, 1])
     with head_l:
         st.markdown('<div class="section-header">Clinical Note</div>', unsafe_allow_html=True)
@@ -684,7 +883,6 @@ with top_L:
         if st.button("Copy Note"):
             st.toast("(Demo) Copy action triggered.")
 
-    # 1) Provider note template 선택
     note_template_label = st.selectbox(
         "Preferred Note Template",
         options=["Dr. Kim UC Style", "Standard ED Style"],
@@ -701,20 +899,17 @@ with top_L:
     note_key = "clinical_note_text"
     note_template_key = "clinical_note_template_key"
 
-    # 2) 현재 템플릿으로 note 생성
     generated_note = st.session_state.note_engine.compose_note(
         ctx,
         template=template_key,
     )
 
-    # 3) 최초 실행 시 초기화
     if note_key not in st.session_state:
         st.session_state[note_key] = generated_note
 
     if note_template_key not in st.session_state:
         st.session_state[note_template_key] = template_key
 
-    # 4) 템플릿이 바뀌면 note를 새로 생성해서 반영
     if st.session_state[note_template_key] != template_key:
         st.session_state[note_template_key] = template_key
         st.session_state[note_key] = generated_note
@@ -722,14 +917,12 @@ with top_L:
         ctx2["intelligence"]["doctor"]["note"]["text"] = generated_note
         hub.data = ctx2
 
-    # 5) AI 결과가 새로 들어오면 현재 템플릿으로 다시 생성
     if results:
         st.session_state[note_key] = generated_note
         ctx2 = ensure_schema(hub.data)
         ctx2["intelligence"]["doctor"]["note"]["text"] = generated_note
         hub.data = ctx2
 
-    # 6) Note 표시/편집
     note_val = st.text_area(
         "note",
         value=st.session_state[note_key],
@@ -737,15 +930,66 @@ with top_L:
         label_visibility="collapsed",
     )
 
-    # 7) 사용자가 직접 수정한 경우 hub와 session_state에 저장
     if note_val != st.session_state[note_key]:
         st.session_state[note_key] = note_val
         ctx2 = ensure_schema(hub.data)
         ctx2["intelligence"]["doctor"]["note"]["text"] = note_val
         hub.data = ctx2
 
-# -------- Top Right: Alerts / Recommendations / Orders --------
-with top_R:
+    st.write("")
+    st.write("")
+    st.write("")
+    st.write("")
+
+    labs_head_l, labs_head_r = st.columns([3, 1])
+    with labs_head_l:
+        st.markdown('<div class="section-header">Critical Labs</div>', unsafe_allow_html=True)
+    with labs_head_r:
+        st.link_button("Open full labs", "/?view=labs")
+
+    labs_history = ((ctx.get("visit") or {}).get("labs") or {}).get("history") or []
+    crit = ((ctx.get("visit") or {}).get("labs") or {}).get("critical") or []
+
+    if not st.session_state.emr_synced:
+        st.caption("Sync EMR to view critical labs.")
+    elif not crit:
+        st.caption("No critical labs detected.")
+    else:
+        rows = build_labs_table_rows(crit, labs_history)
+        df = pd.DataFrame(rows)
+
+        crit_by_name = {(i.get("name") or i.get("display") or "").strip(): i for i in crit}
+
+        sel = st.dataframe(
+            df,
+            hide_index=True,
+            width="stretch",
+            on_select="rerun",
+            selection_mode="single-row",
+        )
+
+        selected_trend = None
+        try:
+            if sel and hasattr(sel, "selection") and sel.selection and sel.selection.rows:
+                ridx = sel.selection.rows[0]
+                selected_trend = str(df.iloc[ridx]["Test"])
+        except Exception:
+            selected_trend = None
+
+        if selected_trend:
+            st.markdown("---")
+            st.markdown(f"**{selected_trend} Trend**")
+            render_trend_plot(
+                selected_trend,
+                labs_history,
+                current_item=crit_by_name.get(selected_trend),
+            )
+        else:
+            st.caption("Click a row to view trend.")
+
+
+# -------- Right: Alerts + Recommendations + Orders + Script/Log --------
+with col_R:
     triage_status = ctx.get("intelligence", {}).get("triage", {}).get("status", "idle")
     doc_status = ctx.get("intelligence", {}).get("doctor", {}).get("status", "idle")
     thinking = triage_status == "thinking" or doc_status == "thinking"
@@ -786,79 +1030,65 @@ with top_R:
         for r in recs:
             st.markdown(f"- {r}")
 
-    orders = ctx.get("intelligence", {}).get("doctor", {}).get("suggested_orders", []) or []
-    if orders:
+    flat_orders = _flatten_suggested_orders_for_ui(ctx)
+    if flat_orders:
         st.write("")
-        st.markdown('<div class="section-header">Suggested Orders</div>', unsafe_allow_html=True)
-        for i, order in enumerate(orders):
-            title = order.get("title", f"Order Group {i+1}")
-            priority = order.get("priority")
-            header = f"{title}" + (f"  ·  {priority}" if priority else "")
-            with st.expander(header, expanded=(i == 0)):
-                items = order.get("items") or []
-                if items:
-                    st.write("\n".join([f"• {x}" for x in items]))
-                else:
-                    st.caption("(No items)")
+        orders_head_l, orders_head_r = st.columns([3, 1])
+        with orders_head_l:
+            st.markdown('<div class="section-header">Suggested Orders</div>', unsafe_allow_html=True)
+        with orders_head_r:
+            if st.button("Send Orders", key="send_orders_button"):
+                st.toast("(Demo) Order routing triggered. Future EMR integration point.")
 
+        for order in flat_orders:
+            label = order.get("label") or "Order"
+            priority = (order.get("priority") or "").strip().lower()
+            reason = order.get("reason") or ""
+            order_type = _title_case_order_type(order.get("type") or "")
+            source_group = order.get("source_group") or ""
 
-# -------- Bottom Left: Critical Labs (left-bottom only) --------
-with bot_L:
+            meta_parts: List[str] = []
+            if order_type:
+                meta_parts.append(order_type)
+            if reason:
+                meta_parts.append(reason)
+            elif source_group:
+                meta_parts.append(source_group)
 
-    st.markdown('<div class="section-header">Critical Labs</div>', unsafe_allow_html=True)
+            pill_class = ""
+            if priority == "high":
+                pill_class = "order-priority-high"
+            elif priority == "medium":
+                pill_class = "order-priority-medium"
+            elif priority == "low":
+                pill_class = "order-priority-low"
 
-    # Open full labs: "링크만" 유지 (EMR 연결 자리)
-    st.link_button("Open full labs", "/?view=labs")
+            priority_html = ""
+            if priority:
+                priority_html = f"<span class='order-pill {pill_class}'>{priority.title()}</span>"
 
-    labs_history = ((ctx.get("visit") or {}).get("labs") or {}).get("history") or []
-    crit = ((ctx.get("visit") or {}).get("labs") or {}).get("critical") or []
+            meta_html = ""
+            if meta_parts:
+                meta_html = f"<div class='order-meta'>{' · '.join(meta_parts)}</div>"
 
-    if not st.session_state.emr_synced:
-        st.caption("Sync EMR to view critical labs.")
-    elif not crit:
-        st.caption("No critical labs detected.")
-    else:
-        # 1) 표 row 만들기
-        rows = build_labs_table_rows(crit, labs_history)
-        df = pd.DataFrame(rows)
-
-        # 2) 현재 critical 값(오늘 값)을 trend에 포함시키기 위한 매핑
-        crit_by_name = {(i.get("name") or i.get("display") or "").strip(): i for i in crit}
-
-        # 3) 버튼/링크 없이 "행 클릭"으로 선택 (세션 유지됨!)
-        #    - 링크 이동이 아니라 streamlit rerun이므로 데이터 안 날아감
-        sel = st.dataframe(
-            df,
-            hide_index=True,
-            width="stretch",
-            on_select="rerun",
-            selection_mode="single-row",
-        )
-
-        selected_trend = None
-        try:
-            if sel and hasattr(sel, "selection") and sel.selection and sel.selection.rows:
-                ridx = sel.selection.rows[0]
-                selected_trend = str(df.iloc[ridx]["Test"])
-        except Exception:
-            selected_trend = None
-
-        # 4) 선택된 test만 아래에 trend 그래프 표시 (추가 버튼/expander 없음)
-        if selected_trend:
-            st.markdown("---")
-            st.markdown(f"**{selected_trend} Trend**")
-            render_trend_plot(
-                selected_trend,
-                labs_history,
-                current_item=crit_by_name.get(selected_trend),
+            st.markdown(
+                f"""
+                <div class="order-row">
+                  <div class="order-row-top">
+                    <div class="order-label">{label}</div>
+                    {priority_html}
+                  </div>
+                  {meta_html}
+                </div>
+                """,
+                unsafe_allow_html=True,
             )
-        else:
-            st.caption("Click a row to view trend.")
 
+    st.write("")
+    st.write("")
+    st.write("")
+    st.write("")
 
-
-# -------- Bottom Right: Script/Log (right-bottom) --------
-with bot_R:
     transcript = ((ctx.get("visit") or {}).get("transcript") or [])
 
     with st.expander("Show full Script & Log", expanded=False):
@@ -896,14 +1126,12 @@ with bot_R:
             else:
                 st.caption("No analysis yet.")
 
-    # 기본 화면: 마지막 한 줄만 (타이틀 없이)
     if transcript:
         last_msg = transcript[-1]
         role_lbl = "Provider" if last_msg.get("role") == "doctor" else "Patient"
         st.markdown(f"**{role_lbl}**: {last_msg.get('text','')}")
     else:
         st.caption("Waiting for input...")
-
 
 # -----------------------------
 # Simulation ticking

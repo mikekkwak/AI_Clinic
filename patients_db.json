@@ -3,23 +3,201 @@
     "profile": {
       "name": "Jane Doe",
       "age": 73,
-      "gender": "F",
-      "pmhx": ["Type 2 DM", "HTN", "Hyperlipidemia"],
-      "allergies": ["Penicillin (Rash)"],
-      "medications": ["Metformin", "Lisinopril", "Aspirin 81mg"]
+      "gender": "F"
     },
+    "pmhx": [
+      "Type 2 DM",
+      "HTN",
+      "Hyperlipidemia"
+    ],
+    "allergies": [
+      "Penicillin (Rash)"
+    ],
+    "medications": [
+      "Metformin",
+      "Lisinopril",
+      "Aspirin 81mg"
+    ],
     "historical_labs": {
       "Troponin-I": [
-        {"date": "10/10/2025", "value": "0.01", "unit": "ng/mL"},
-        {"date": "1/4/2026", "value": "0.01", "unit": "ng/mL"}
+        {
+          "date": "10/10/2025",
+          "value": "0.01",
+          "unit": "ng/mL"
+        },
+        {
+          "date": "01/04/2026",
+          "value": "0.01",
+          "unit": "ng/mL"
+        }
+      ],
+      "Creatinine": [
+        {
+          "date": "10/10/2025",
+          "value": "1.1",
+          "unit": "mg/dL"
+        },
+        {
+          "date": "01/04/2026",
+          "value": "1.2",
+          "unit": "mg/dL"
+        }
       ]
     },
+    "current_labs": [
+      {
+        "name": "Troponin-I",
+        "value": "0.45",
+        "unit": "ng/mL",
+        "flag": "High",
+        "date": "03/09/2026"
+      },
+      {
+        "name": "Creatinine",
+        "value": "1.6",
+        "unit": "mg/dL",
+        "flag": "High",
+        "date": "03/09/2026"
+      }
+    ],
+    "historical_vitals": [],
     "current_vitals": {
       "bp": "140/90",
       "hr": "90",
       "rr": "18",
-      "spo2(%)": "97",
-      "temp(F)": "98.4"
+      "spo2": "97%",
+      "temp": "98.4F"
+    }
+  },
+
+  "P1002": {
+    "profile": {
+      "name": "John Carter",
+      "age": 52,
+      "gender": "M"
+    },
+    "pmhx": [
+      "HTN"
+    ],
+    "allergies": [
+      "NKDA"
+    ],
+    "medications": [
+      "Losartan"
+    ],
+    "historical_labs": {
+      "WBC": [
+        {
+          "date": "11/12/2025",
+          "value": "7.8",
+          "unit": "x10^9/L"
+        }
+      ],
+      "Lactate": [
+        {
+          "date": "11/12/2025",
+          "value": "1.1",
+          "unit": "mmol/L"
+        }
+      ],
+      "Creatinine": [
+        {
+          "date": "11/12/2025",
+          "value": "1.0",
+          "unit": "mg/dL"
+        }
+      ]
+    },
+    "current_labs": [
+      {
+        "name": "WBC",
+        "value": "19.2",
+        "unit": "x10^9/L",
+        "flag": "High",
+        "date": "03/09/2026"
+      },
+      {
+        "name": "Lactate",
+        "value": "4.5",
+        "unit": "mmol/L",
+        "flag": "High",
+        "date": "03/09/2026"
+      },
+      {
+        "name": "Creatinine",
+        "value": "1.5",
+        "unit": "mg/dL",
+        "flag": "High",
+        "date": "03/09/2026"
+      }
+    ],
+    "historical_vitals": [],
+    "current_vitals": {
+      "bp": "90/60",
+      "hr": "122",
+      "rr": "26",
+      "spo2": "97%",
+      "temp": "102.6F"
+    }
+  },
+
+  "P1003": {
+    "profile": {
+      "name": "Emily Park",
+      "age": 29,
+      "gender": "F"
+    },
+    "pmhx": [],
+    "allergies": [
+      "NKDA"
+    ],
+    "medications": [],
+    "historical_labs": {
+      "Urinalysis - WBC": [
+        {
+          "date": "08/15/2024",
+          "value": "10-20",
+          "unit": "/HPF"
+        }
+      ],
+      "Urinalysis - Nitrite": [
+        {
+          "date": "08/15/2024",
+          "value": "Positive",
+          "unit": ""
+        }
+      ]
+    },
+    "current_labs": [
+      {
+        "name": "Urinalysis - Leukocyte Esterase",
+        "value": "Positive",
+        "unit": "",
+        "flag": "Abnormal",
+        "date": "03/09/2026"
+      },
+      {
+        "name": "Urinalysis - Nitrite",
+        "value": "Positive",
+        "unit": "",
+        "flag": "Abnormal",
+        "date": "03/09/2026"
+      },
+      {
+        "name": "Urinalysis - WBC",
+        "value": "20-50",
+        "unit": "/HPF",
+        "flag": "Abnormal",
+        "date": "03/09/2026"
+      }
+    ],
+    "historical_vitals": [],
+    "current_vitals": {
+      "bp": "118/72",
+      "hr": "82",
+      "rr": "16",
+      "spo2": "99%",
+      "temp": "98.2F"
     }
   }
 }

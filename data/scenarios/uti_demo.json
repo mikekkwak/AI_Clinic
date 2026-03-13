@@ -1,0 +1,24 @@
+{
+    "scenario_name": "Uncomplicated UTI with Discharge Guidance",
+    "patient_id": "P1003",
+    "timeline": [
+      { "seconds": 0, "type": "start", "data": { "vitals": {"bp": "118/72", "hr": "82", "rr": "16", "spo2": "99%", "temp": "98.2F"} } },
+  
+      { "seconds": 2, "type": "transcript", "data": {"role": "doctor", "text": "Hi Ms. Park, I’m Dr. Lee. What brings you in today?"} },
+      { "seconds": 5, "type": "transcript", "data": {"role": "patient", "text": "I’ve had burning when I urinate for about two days."} },
+  
+      { "seconds": 9, "type": "transcript", "data": {"role": "doctor", "text": "Any urinary frequency or urgency?"} },
+      { "seconds": 12, "type": "transcript", "data": {"role": "patient", "text": "Yes, I feel like I need to go all the time."} },
+  
+      { "seconds": 16, "type": "transcript", "data": {"role": "doctor", "text": "Any fever or chills?"} },
+      { "seconds": 19, "type": "transcript", "data": {"role": "patient", "text": "No."} },
+  
+      { "seconds": 23, "type": "transcript", "data": {"role": "doctor", "text": "Any pain in your back or side?"} },
+      { "seconds": 26, "type": "transcript", "data": {"role": "patient", "text": "No, just some discomfort in my lower abdomen."} },
+  
+      { "seconds": 30, "type": "transcript", "data": {"role": "doctor", "text": "Have you had urinary infections before?"} },
+      { "seconds": 33, "type": "transcript", "data": {"role": "patient", "text": "Yes, once a few years ago."} },
+  
+      { "seconds": 38, "type": "transcript", "data": {"role": "doctor", "text": "This sounds most consistent with a bladder infection. We’ll review treatment options and I’ll go over when you should return or go to the ER if symptoms worsen."} }
+    ]
+}

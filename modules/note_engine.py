@@ -138,8 +138,10 @@ class NoteEngine:
         for lab in self._critical_labs(ctx):
             name = (lab.get("name") or "").lower()
             flag = (lab.get("flag") or "").lower()
+
             if "troponin" in name and flag in ("high", "critical"):
                 return True
+
             if "troponin" in name:
                 try:
                     val = float(lab.get("value"))
@@ -154,27 +156,12 @@ class NoteEngine:
         patient_txt = self._full_patient_text(ctx)
         pmhx = " ".join(self._pmhx_list(ctx)).lower()
 
-        signal_words = [
-            "acs",
-            "cardiac",
-            "chest pain",
-            "chest pressure",
-            "chest tightness",
-            "epigastric",
-            "shoulder",
-            "diaphoresis",
-            "clammy",
-            "cold sweat",
-            "short of breath",
-            "winded",
-            "nausea",
-        ]
-
         if "acs" in titles or "cardiac" in titles:
             return True
 
         strong_features = 0
-        if any(w in patient_txt for w in ["epigastric", "upper stomach", "stomach"]):
+
+        if any(w in patient_txt for w in ["epigastric", "upper stomach", "below my ribs", "stomach"]):
             strong_features += 1
         if any(w in patient_txt for w in ["shoulder", "left shoulder"]):
             strong_features += 1
@@ -182,12 +169,12 @@ class NoteEngine:
             strong_features += 1
         if any(w in patient_txt for w in ["short of breath", "winded", "sob"]):
             strong_features += 1
-        if "dm" in pmhx or "diabetes" in pmhx:
+        if any(w in pmhx for w in ["dm", "diabetes"]):
             strong_features += 1
         if self._troponin_high(ctx):
             strong_features += 2
 
-        return strong_features >= 3 or any(w in titles for w in signal_words)
+        return strong_features >= 3
 
     # -----------------------------
     # Text generation helpers
@@ -201,28 +188,31 @@ class NoteEngine:
 
     def _chief_complaint(self, ctx: Dict[str, Any]) -> str:
         """
-        First patient utterance 기반 + 간단한 symptom normalization
+        chief complaint는 짧고 chart-friendly 하게.
         """
         txt = self._full_patient_text(ctx)
 
         if any(p in txt for p in ["chest pressure", "chest tightness", "chest pain"]):
             return "Chest pain / chest pressure"
-        if any(p in txt for p in ["epigastric", "upper stomach", "upper part", "below my ribs"]):
-            if self._acs_concern(ctx):
+
+        if any(p in txt for p in ["epigastric", "upper stomach", "upper part", "below my ribs", "stomach"]):
+            if any(p in txt for p in ["pressure", "heavy", "pressing down"]):
                 return "Epigastric pain / pressure"
             return "Epigastric pain"
+
         if "short of breath" in txt or "winded" in txt:
             return "Shortness of breath"
 
-        # fallback: 첫 patient 발화
         return self._first_patient_statement(ctx)
 
     def _hpi(self, ctx: Dict[str, Any]) -> str:
         """
-        transcript에서 patient 발화를 기반으로 더 실제 chart처럼 HPI 구성
+        transcript 기반 HPI 구성.
+        실제 의사 노트처럼 짧고 핵심적으로.
         """
         patient_txt = self._full_patient_text(ctx)
         profile = self._patient_profile(ctx)
+
         age = profile.get("age")
         sex = profile.get("sex") or profile.get("gender") or ""
         sex_word = "patient"
@@ -231,35 +221,33 @@ class NoteEngine:
         elif str(sex).upper().startswith("M"):
             sex_word = "male"
 
-        pieces: List[str] = []
-
         intro = "Patient"
         if age:
             intro = f"{age}-year-old {sex_word}"
-        pieces.append(intro + " presents with ")
 
-        symptom_bits: List[str] = []
+        symptom_core = "symptoms"
         if any(p in patient_txt for p in ["epigastric", "upper stomach", "below my ribs", "stomach"]):
-            if any(p in patient_txt for p in ["heavy", "pressure", "pressing down"]):
-                symptom_bits.append("epigastric pressure-like pain")
+            if any(p in patient_txt for p in ["pressure", "heavy", "pressing down"]):
+                symptom_core = "epigastric pressure-like pain"
             else:
-                symptom_bits.append("epigastric pain")
+                symptom_core = "epigastric pain"
         elif any(p in patient_txt for p in ["chest pain", "chest pressure", "chest tightness"]):
-            symptom_bits.append("chest discomfort")
+            symptom_core = "chest discomfort"
 
+        features: List[str] = []
         if "shoulder" in patient_txt:
-            symptom_bits.append("radiation to the left shoulder")
+            features.append("radiation to the left shoulder")
         if any(p in patient_txt for p in ["nausea", "nauseous"]):
-            symptom_bits.append("associated nausea")
+            features.append("associated nausea")
         if any(p in patient_txt for p in ["clammy", "cold sweat", "sweat", "diaphoresis"]):
-            symptom_bits.append("diaphoresis")
+            features.append("diaphoresis")
         if any(p in patient_txt for p in ["short of breath", "winded", "sob"]):
-            symptom_bits.append("mild shortness of breath")
+            features.append("mild shortness of breath")
 
-        if not symptom_bits:
-            symptom_bits.append("the above symptoms")
+        hpi = f"{intro} presents with {symptom_core}"
 
-        pieces.append(", ".join(symptom_bits))
+        if features:
+            hpi += ", " + ", ".join(features)
 
         onset_bits: List[str] = []
         if any(p in patient_txt for p in ["3 or 4 hours", "three or four hours", "3-4 hours"]):
@@ -271,18 +259,20 @@ class NoteEngine:
             onset_bits.append("after breakfast")
 
         if onset_bits:
-            pieces.append(". Symptoms began " + ", ".join(onset_bits))
+            hpi += ". Symptoms began " + ", ".join(onset_bits)
 
-        if "tums" in patient_txt and any(p in patient_txt for p in ["hasn’t helped", "hasn't helped", "didn't help", "without relief"]):
-            pieces.append(". Symptoms were not relieved by antacids")
+        if "tums" in patient_txt and any(
+            p in patient_txt for p in ["hasn’t helped", "hasn't helped", "didn't help", "not helped", "without relief"]
+        ):
+            hpi += ". Symptoms were not relieved by antacids"
 
         if self._pmhx_list(ctx):
-            pieces.append(f". Significant PMH includes {self._pmhx(ctx)}")
+            hpi += f". PMH notable for {self._pmhx(ctx)}"
 
-        text = "".join(pieces).strip()
-        if not text.endswith("."):
-            text += "."
-        return text
+        if not hpi.endswith("."):
+            hpi += "."
+
+        return hpi
 
     def _focused_ros(self, ctx: Dict[str, Any]) -> str:
         txt = self._full_patient_text(ctx)
@@ -299,9 +289,11 @@ class NoteEngine:
         if "shoulder" in txt:
             positives.append("positive for left shoulder radiation")
 
-        # only include negatives if they are reasonably supported by transcript
         if "vomit" not in txt and "vomiting" not in txt:
             negatives.append("negative for vomiting")
+
+        if not positives and not negatives:
+            return "Focused review of systems otherwise negative except as documented in HPI."
 
         parts = []
         if positives:
@@ -309,25 +301,22 @@ class NoteEngine:
         if negatives:
             parts.append(", ".join(negatives))
 
-        if not parts:
-            return "Focused review of systems otherwise negative except as documented in HPI."
         return ". ".join(parts) + "."
 
     def _diagnostic_lines(self, ctx: Dict[str, Any]) -> List[str]:
         lines: List[str] = []
         crit = self._critical_labs(ctx)
-        if crit:
-            for lab in crit:
-                name = lab.get("name") or "Lab"
-                val = lab.get("value", "")
-                unit = lab.get("unit", "")
-                flag = lab.get("flag", "")
-                line = f"{name}: {val}"
-                if unit:
-                    line += f" {unit}"
-                if flag:
-                    line += f" ({flag})"
-                lines.append(line)
+        for lab in crit:
+            name = lab.get("name") or "Lab"
+            val = lab.get("value", "")
+            unit = lab.get("unit", "")
+            flag = lab.get("flag", "")
+            line = f"{name}: {val}"
+            if unit:
+                line += f" {unit}"
+            if flag:
+                line += f" ({flag})"
+            lines.append(line)
         return lines
 
     def _assessment_lines(self, ctx: Dict[str, Any], setting: str) -> List[str]:
@@ -350,14 +339,51 @@ class NoteEngine:
         if self._has_phrase(ctx, ["short of breath", "winded"]):
             lines.append("Shortness of breath.")
 
-        # keep concise, avoid clutter
-        seen: List[str] = []
         out: List[str] = []
-        for l in lines:
-            if l not in seen:
-                seen.append(l)
-                out.append(l)
+        seen = set()
+        for line in lines:
+            if line not in seen:
+                out.append(line)
+                seen.add(line)
+
         return out[:3]
+
+    def _mdm_text_uc(self, ctx: Dict[str, Any]) -> str:
+        acs = self._acs_concern(ctx)
+        troponin_high = self._troponin_high(ctx)
+        pmhx = self._pmhx(ctx)
+
+        if acs and troponin_high:
+            return (
+                "Given age, cardiovascular risk factors, symptom profile, and elevated troponin, "
+                "acute coronary syndrome is a primary concern. Higher level evaluation is recommended."
+            )
+
+        if acs:
+            return (
+                "Given age, cardiovascular risk factors, and atypical symptom profile, acute coronary syndrome "
+                "cannot be excluded in the urgent care setting."
+            )
+
+        return "Clinical presentation reviewed and further evaluation guided by history, exam, and available data."
+
+    def _mdm_text_ed(self, ctx: Dict[str, Any]) -> str:
+        acs = self._acs_concern(ctx)
+        troponin_high = self._troponin_high(ctx)
+
+        if acs and troponin_high:
+            return (
+                "Presentation is concerning for acute coronary syndrome / NSTEMI given risk factors, concerning symptoms, "
+                "and elevated troponin. Ongoing cardiac evaluation with monitoring and specialty input is warranted."
+            )
+
+        if acs:
+            return (
+                "Presentation is concerning for atypical acute coronary syndrome and warrants continued cardiac evaluation, "
+                "serial biomarkers, and repeat ECG as indicated."
+            )
+
+        return "Medical decision making based on current presentation, diagnostic data, and reassessment."
 
     def _plan_lines_uc(self, ctx: Dict[str, Any]) -> List[str]:
         lines: List[str] = []
@@ -365,11 +391,11 @@ class NoteEngine:
 
         orders = self._orders(ctx)
         if orders:
-            lines.append("Recommend immediate cardiac evaluation including ECG and serial cardiac enzymes.")
+            lines.append("Recommend immediate ECG and cardiac enzyme evaluation.")
 
         if acs:
             lines.append("Recommend transfer to the emergency department / higher level of care for further evaluation and monitoring.")
-            lines.append("Discussed concern for possible cardiac etiology with patient.")
+            lines.append("Patient advised that cardiac etiology remains a significant concern.")
         else:
             lines.append("Continue diagnostic evaluation based on clinical course.")
 
@@ -382,14 +408,14 @@ class NoteEngine:
         troponin_high = self._troponin_high(ctx)
 
         if acs:
-            lines.append("Cardiac workup initiated / recommended including ECG, troponin, and continued monitoring.")
+            lines.append("Continue cardiac evaluation with ECG, troponin trending, and monitoring.")
             if troponin_high:
-                lines.append("Cardiology consultation and hospital admission / observation are indicated.")
+                lines.append("Cardiology consultation and hospital admission / observation are recommended.")
             else:
                 lines.append("Serial troponins and repeat ECG should be considered.")
             lines.append("Aspirin should be considered if no contraindication.")
         else:
-            lines.append("Further diagnostic evaluation guided by clinical course.")
+            lines.append("Further diagnostic evaluation guided by clinical course and reassessment.")
 
         return lines
 
@@ -420,10 +446,11 @@ class NoteEngine:
 
         diagnostics = self._diagnostic_lines(ctx)
         assessment = self._assessment_lines(ctx, setting="uc")
+        mdm = self._mdm_text_uc(ctx)
         plan = self._plan_lines_uc(ctx)
         disposition = self._disposition_uc(ctx)
 
-        diagnostics_text = "\n".join([f"- {x}" for x in diagnostics]) if diagnostics else "No critical diagnostic results available."
+        diagnostics_text = "\n".join([f"- {x}" for x in diagnostics]) if diagnostics else "- No critical diagnostic results available."
         assessment_text = "\n".join([f"- {x}" for x in assessment]) if assessment else "- Acute symptoms under evaluation."
         plan_text = "\n".join([f"- {x}" for x in plan]) if plan else "- Continue clinical reassessment."
 
@@ -453,13 +480,16 @@ PHYSICAL EXAM
 General: Alert, conversant, no acute toxic appearance.
 Cardiovascular: Regular rate and rhythm.
 Respiratory: No acute respiratory distress.
-Abdomen: Nonperitoneal on limited urgent care assessment.
+Abdomen: Soft, no peritoneal signs on limited urgent care assessment.
 
 DIAGNOSTICS
 {diagnostics_text}
 
 ASSESSMENT
 {assessment_text}
+
+MEDICAL DECISION MAKING
+{mdm}
 
 PLAN
 {plan_text}
@@ -485,10 +515,11 @@ DISPOSITION
 
         diagnostics = self._diagnostic_lines(ctx)
         assessment = self._assessment_lines(ctx, setting="ed")
+        mdm = self._mdm_text_ed(ctx)
         plan = self._plan_lines_ed(ctx)
         disposition = self._disposition_ed(ctx)
 
-        diagnostics_text = "\n".join([f"- {x}" for x in diagnostics]) if diagnostics else "No critical diagnostic results available."
+        diagnostics_text = "\n".join([f"- {x}" for x in diagnostics]) if diagnostics else "- No critical diagnostic results available."
         assessment_text = "\n".join([f"- {x}" for x in assessment]) if assessment else "- Acute symptoms under evaluation."
         plan_text = "\n".join([f"- {x}" for x in plan]) if plan else "- Continue reassessment."
 
@@ -523,12 +554,14 @@ Abdomen: Soft, no peritoneal signs on current exam.
 DIAGNOSTIC RESULTS
 {diagnostics_text}
 
-MEDICAL DECISION MAKING
-{assessment_text}
-{plan_text}
-
 IMPRESSION
 {assessment_text}
+
+MEDICAL DECISION MAKING
+{mdm}
+
+PLAN
+{plan_text}
 
 DISPOSITION
 {disposition}
